@@ -1,0 +1,31 @@
+{
+    "name": "PicoInno/simplelog",
+    "description": "For record logs for every activities",
+    "type": "library",
+    "version": "1.3.2",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "PicoInno\\SimpleLog\\": "src/"
+        },
+        "files": [
+            "src/Helpers/activity.php",
+            "src/Helpers/ActivityLogger.php"
+        ]
+    },
+    "authors": [
+        {
+            "name": "paingsoeko",
+            "email": "dev.PicoInno@gmail.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {},
+    "extra": {
+        "laravel": {
+            "providers": [
+                "PicoInno\\SimpleLog\\SimpleLogServiceProvider"
+            ]
+        }
+    }
+}
