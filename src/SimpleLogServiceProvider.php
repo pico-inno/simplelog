@@ -10,20 +10,15 @@ class SimpleLogServiceProvider extends ServiceProvider
          // Load package migrations
         $this->loadMigrationsFrom(__DIR__.'/database/migrations');
 
-        // Merge package configuration
-        $this->mergeConfigFrom(
-            __DIR__.'/config/log.php', 'simplelog'
-        );
-
-        // Publish models to the application
-        $this->publishes([
-            __DIR__.'/Models/ActivityLog.php' => app_path('/Models/ActivityLog.php'),
-        ], 'models');
-
         // Publish package configuration
         $this->publishes([
-            __DIR__.'/config/log.php' => config_path('log.php'),
+            __DIR__.'/config/activity_log.php' => config_path('activity_log.php'),
         ], 'config');
+
+        // Merge package configuration
+        $this->mergeConfigFrom(
+            __DIR__.'/config/activity_log.php', 'simplelog'
+        );
 
         $this->commands([
             \PicoInno\SimpleLog\Console\PurgeOldLogs::class,

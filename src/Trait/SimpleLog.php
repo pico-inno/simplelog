@@ -2,80 +2,118 @@
 
 namespace PicoInno\SimpleLog\Trait;
 
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use PicoInno\SimpleLog\Helpers\ActivityLogger;
+use PicoInno\SimpleLog\LogOptions;
 
 trait SimpleLog
 {
     /**
-     * Boot the trait.
+     * For storing old attributes value on update event
      *
-     * This method registers a model event listener for creating, updating,
-     * and deleting events, which automatically logs the activities.
+     * @var bool
+     */
+    public $hasLog = true;
+
+    /**
+     * Get the default log options for the model.
+     *
+     * @return \PicoInno\SimpleLog\LogOptions
+     */
+    public function getLogOptions()
+    {
+        return LogOptions::defaults();
+    }
+
+    /**
+     * Determine which model events should be logged.
+     *
+     * @return array<string>
+     */
+    protected function shouldLogEvents()
+    {
+        return ['created', 'updated', 'deleted'];
+    }
+
+    /**
+     * Boot the SimpleLog trait and attach event listeners.
      *
      * @return void
      */
     protected static function bootSimpleLog()
     {
-        static::created(function ($model) {
-            self::logActivity($model, 'Created');
-        });
+        if (! config('activity_log.must_be_logged')) {
+            return;
+        }
 
-        static::updated(function ($model) {
-            self::logActivity($model, 'Updated');
-        });
-
-        static::deleted(function ($model) {
-            self::logActivity($model, 'Deleted');
-        });
+        foreach ((new static)->shouldLogEvents() as $event) {
+            static::$event(fn ($model) => static::logActivity($model, $event));
+        }
     }
 
     /**
-     * Log the activity.
+     * Handle logging of activity for a given model event.
      *
-     * @param \Illuminate\Database\Eloquent\Model $model
-     * @param string $action
+     * @param  \Illuminate\Database\Eloquent\Model  $model
+     * @param  string  $event
      * @return void
+     *
+     * @throws \Exception
      */
-    protected static function logActivity($model, $action)
+    protected static function logActivity($model, $event)
     {
-        $logName = $model->getLogName();
-        $description = $model->getLogDescription($action);
-        $event = strtolower($action);
-        $status = 'success';
+        $logOptions = (new static)->getLogOptions();
+        $logColumns = $logOptions->logAttributes;
 
+        $allDbColumns = Schema::getColumnListing($model->getTable());
+        $logExceptColumns = $logOptions->logExceptAttributes;
 
-        // Get custom loggable columns if defined in the model
-        $loggableColumns = isset($model->loggable) ? $model->loggable : null;
+        $modelName = class_basename($model);
 
-        // Determine which columns to log
-        $columnsToLog = $loggableColumns ?? $model->getFillable();
+        $logDescription = ($logOptions->logDescriptionCallback)($event) ?? "The {$modelName} has been {$event}";
 
+        if (in_array('*', $logColumns)) {
+            $logColumns = $allDbColumns;
+        }
 
-        // Initialize properties array
+        if ($logOptions->logFillable) {
+            $logColumns = array_unique(array_merge($logColumns, $model->getFillable()));
+        }
+
+        if ($logOptions->logOnlyDirty && $event === 'updated') {
+            $logColumns = array_intersect($logColumns, array_keys($model->getDirty()));
+        }
+
+        if (! $logOptions->logTimestamps) {
+            $logExceptColumns = array_merge($logExceptColumns, $model->getDates());
+        }
+
+        $loggingColumns = array_diff($logColumns, $logExceptColumns);
+
+        if (empty($loggingColumns)) {
+            return;
+        }
+
+        $newData = $model->getAttributes();
+        $oldData = $model->getRawOriginal();
+
         $properties = [];
+        foreach ($loggingColumns as $column) {
+            $properties['data'][$column] = data_get($newData, $column);
 
-        if ($action === 'Created') {
-            $properties['created_data'] =  $model->only($columnsToLog);
+            if ($event === 'updated') {
+                $properties['old'][$column] = data_get($oldData, $column);
+            }
         }
 
-        if ($action === 'Updated') {
-            $properties['old'] = array_intersect_key($model->getOriginal(), array_flip($columnsToLog));
-            $properties['new'] = array_intersect_key($model->getDirty(), array_flip($columnsToLog));
-        }
-
-        if ($action === 'Deleted') {
-            $properties['deleted_data'] = $model->only($columnsToLog);
-        }
-
-        $activityLogger = new ActivityLogger($logName);
-        $activityLogger->log($description)
-                       ->event($event)
-                       ->status($status)
-                       ->properties($properties)
-                       ->save();
+        activity($model->logName)
+            ->log($logDescription)
+            ->properties($properties)
+            ->event($event)
+            ->status('success')
+            ->save();
     }
-
 
     /**
      * Get the log name for the model.
@@ -84,32 +122,28 @@ trait SimpleLog
      */
     protected function getLogName()
     {
-        // Customize this method to return the desired log name for your model
         return "{$this->getTable()}";
     }
 
     /**
      * Get the log description for the model activity.
      *
-     * @param string $action
+     * @param  string  $event
      * @return string
      */
-    protected function getLogDescription($action)
+    protected function getLogDescription($event)
     {
-        // Get the model's singular table name (e.g., "task" from "tasks")
         $modelName = ucfirst(Str::singular($this->getTable()));
 
-        // Generate a descriptive log message based on the action
-        switch ($action) {
-            case 'Created':
+        switch ($event) {
+            case 'created':
                 return "{$modelName} record was created";
-            case 'Updated':
+            case 'updated':
                 return "{$modelName} record was updated";
-            case 'Deleted':
+            case 'deleted':
                 return "{$modelName} record was deleted";
             default:
-                return "{$modelName} record was {$action}";
+                return "{$modelName} record was {$event}";
         }
     }
-
 }

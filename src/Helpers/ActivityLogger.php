@@ -2,179 +2,235 @@
 
 namespace PicoInno\SimpleLog\Helpers;
 
-use PicoInno\SimpleLog\Models\ActivityLog;
 use Closure;
+use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
+use PicoInno\SimpleLog\LogBatch;
+use PicoInno\SimpleLog\Models\ActivityLog;
 
+/**
+ * Class ActivityLogger
+ *
+ * Handles logging of model events and actions into the activity log.
+ * Provides methods to set log attributes, save new logs, update existing ones,
+ * query logs, and perform log maintenance.
+ */
 class ActivityLogger
 {
-    protected $event;
-    protected $description;
-    protected $log_name;
-    protected $status;
-    protected $data;
+    /**
+     * The underlying activity log model instance.
+     */
+    protected ActivityLog $activityLog;
 
-    // Manual transaction state
-    protected static $isLogging = false;
-    protected static $records = [];
-    protected static $batchId = 0;
-    protected static $listenerRegistered = false;
+    /**
+     * Arbitrary data for log properties.
+     *
+     * @var array|object|null
+     */
+    protected $propertiesData;
 
-    public function __construct($log_name = null)
+    /**
+     * ActivityLogger constructor.
+     */
+    public function __construct()
     {
-        $this->log_name = $log_name;
+        $this->activityLog = app(ActivityLog::class);
+        $this->activityLog->created_by = Auth::id();
     }
 
     /**
-     * Start manual transaction
+     * Get the default log name from the configuration.
      */
-    public static function beginTransaction()
+    public function getDefaultLogName(): string
     {
-        self::$isLogging = true;
-        self::$batchId = (ActivityLog::max('batch_id') ?? 0) + 1;
-        self::$records = [
-            'create' => [],
-            'update' => [],
-            'delete' => [],
-        ];
-
-        if (!self::$listenerRegistered) {
-            DB::listen(function ($query) {
-                if (!self::$isLogging) return;
-
-                $sql = Str::upper(substr($query->sql, 0, 6));
-                if (in_array($sql, ['INSERT', 'UPDATE', 'DELETE'])) {
-                    $key = match ($sql) {
-                        'INSERT' => 'create',
-                        'UPDATE' => 'update',
-                        'DELETE' => 'delete',
-                        default => 'others',
-                    };
-
-                    self::$records[$key][] = [
-                        'sql' => $query->sql,
-                        'bindings' => self::mapBindings($query),
-                        'time' => $query->time,
-                        'table' => self::getTableNameFromSQL($query->sql),
-                    ];
-                }
-            });
-            self::$listenerRegistered = true;
-        }
-
-        DB::beginTransaction();
+        return config('activity_log.log_name', 'default');
     }
 
     /**
-     * Commit manual transaction
+     * Set the log name for this activity.
+     *
+     * @param  string  $name  The log name.
+     * @return $this
      */
-    public static function commit()
+    public function name(string $name = null): self
     {
-        DB::commit();
+        $this->activityLog->log_name = $name ?? $this->getDefaultLogName();
 
-        foreach (self::$records as $action => $datas) {
-            foreach ($datas as $data) {
-                $table = Str::singular($data['table']);
-                ActivityLog::create([
-                    'log_name'    => "{$action}_{$table}",
-                    'event'       => $action,
-                    'properties'  => json_encode($data['bindings']),
-                    'description' => "The {$table} has been {$action}d",
-                    'status'      => 'success',
-                    'batch_id'    => self::$batchId,
-                    'created_by'  => Auth::id() ?? null,
-                ]);
+        return $this;
+    }
+
+    /**
+     * Set the log description.
+     *
+     * @param  string  $description  A human-readable description of the activity.
+     * @return $this
+     */
+    public function log(string $description): self
+    {
+        $this->activityLog->description = $description;
+
+        return $this;
+    }
+
+    /**
+     * Set the event type for the activity.
+     *
+     * @param  string  $event  The event type (e.g., created, updated, deleted, restored, login, logout, import, export, upload, download).
+     * @return $this
+     */
+    public function event(string $event): self
+    {
+        $this->activityLog->event = $event;
+
+        return $this;
+    }
+
+    /**
+     * Set the status of the operation.
+     *
+     * @param  string  $status  The status of the operation (e.g., success, warn, fail).
+     * @return $this
+     */
+    public function status(string $status): self
+    {
+        $this->activityLog->status = $status;
+
+        return $this;
+    }
+
+    /**
+     * Set the properties data for the log.
+     *
+     * @param  array|object  $data  Arbitrary properties associated with the log.
+     * @return $this
+     */
+    public function properties(array|object $data): self
+    {
+        $this->activityLog->properties = $data;
+
+        return $this;
+    }
+
+    /**
+     * Automatically detect the event type based on the calling function name.
+     * Supports: store, update, destroy.
+     *
+     * @return $this
+     */
+    public function autoDetectEvent(): self
+    {
+        $trace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2);
+
+        if (isset($trace[1]['function'])) {
+            $methodName = $trace[1]['function'];
+
+            if (in_array($methodName, ['store', 'update', 'destroy'])) {
+                $this->event($methodName);
             }
         }
 
-        self::reset();
+        return $this;
     }
 
     /**
-     * Rollback manual transaction
+     * Save the activity log entry to the database.
      */
-    public static function rollback()
+    public function save(): void
     {
-        DB::rollBack();
-
-        foreach (self::$records as $action => $datas) {
-            foreach ($datas as $data) {
-                $table = Str::singular($data['table']);
-                ActivityLog::create([
-                    'log_name'    => "{$action}_{$table}",
-                    'event'       => $action,
-                    'properties'  => json_encode($data['bindings']),
-                    'description' => "The {$action} on {$table} was rolled back",
-                    'status'      => 'fail',
-                    'batch_id'    => self::$batchId,
-                    'created_by'  => Auth::id() ?? null,
-                ]);
-            }
+        if (LogBatch::$is_logging_batch) {
+            $this->activityLog->batch_id = LogBatch::getBatchUuid();
         }
 
-        self::reset();
+        $this->activityLog->save();
     }
 
     /**
-     * Closure style transaction (wraps manual methods)
+     * Update an existing activity log entry.
+     *
+     * @param  int  $id  The ID of the activity log entry to update.
+     */
+    public function updateLog(int $id): void
+    {
+        $activityLog = ActivityLog::findOrFail($id);
+
+        $activityLog->update([
+            'log_name' => $this->activityLog->log_name ?? $activityLog->log_name,
+            'description' => $this->activityLog->description ?? $activityLog->description,
+            'event' => $this->activityLog->event ?? $activityLog->event,
+            'status' => $this->activityLog->status ?? $activityLog->status,
+            'properties' => $this->propertiesData ? json_encode($this->propertiesData) : $activityLog->properties,
+            'created_by' => Auth::id() ?? $activityLog->created_by,
+        ]);
+    }
+
+    /**
+     * Retrieve all activity log entries.
+     *
+     * @return \Illuminate\Database\Eloquent\Collection<int, \PicoInno\SimpleLog\Models\ActivityLog>
+     */
+    public function all(): Collection
+    {
+        $query = ActivityLog::query();
+
+        if ($this->activityLog->log_name !== null) {
+            $query->where('log_name', $this->activityLog->log_name);
+        }
+
+        return $query->get();
+    }
+
+    /**
+     * Retrieve the most recent activity log entry.
+     *
+     * @return \Illuminate\Database\Eloquent\Model|\PicoInno\SimpleLog\Models\ActivityLog|null
+     */
+    public function last(): ?Model
+    {
+        $query = ActivityLog::latest();
+
+        if ($this->activityLog->log_name !== null) {
+            $query->where('log_name', $this->activityLog->log_name);
+        }
+
+        return $query->first();
+    }
+
+    /**
+     * Purge old activity logs by calling the Artisan command.
+     *
+     * @return int The exit code returned by the Artisan command.
+     */
+    public function purgeOldLogs(): int
+    {
+        return Artisan::call('simplelog:purge');
+    }
+
+    /**
+     * Execute a closure within a database transaction.
+     *
+     * @template T
+     *
+     * @param  \Closure():T  $callback  The callback to execute within the transaction.
+     * @return T
+     *
+     * @throws \Throwable
      */
     public static function transaction(Closure $callback)
     {
         try {
-            self::beginTransaction();
+            DB::beginTransaction();
 
             $result = $callback();
 
-            self::commit();
+            DB::commit();
 
             return $result;
         } catch (\Throwable $e) {
-            self::rollback();
+            DB::rollBack();
             throw $e;
         }
-    }
-
-    /**
-     * Reset state
-     */
-    protected static function reset()
-    {
-        self::$isLogging = false;
-        self::$records = [];
-        self::$batchId = 0;
-    }
-
-    /**
-     * Convert bindings
-     */
-    protected static function mapBindings($query)
-    {
-        return collect($query->bindings)->map(function ($binding) {
-            if ($binding instanceof \DateTime) {
-                return $binding->format('Y-m-d H:i:s');
-            }
-            return $binding;
-        })->toArray();
-    }
-
-    /**
-     * Extract table name from SQL
-     */
-    private static function getTableNameFromSQL(string $sql): ?string
-    {
-        $matches = []; // always initialize
-        $sqlLower = strtolower($sql); // convert to lowercase for comparison
-
-        if (str_starts_with($sqlLower, 'insert')) {
-            preg_match('/insert\s+into\s+["`]?(\w+)["`]*/i', $sql, $matches);
-        } elseif (str_starts_with($sqlLower, 'update')) {
-            preg_match('/update\s+["`]?(\w+)["`]*/i', $sql, $matches);
-        } elseif (str_starts_with($sqlLower, 'delete')) {
-            preg_match('/delete\s+from\s+["`]?(\w+)["`]*/i', $sql, $matches);
-        }
-
-        return $matches[1] ?? null;
     }
 }
