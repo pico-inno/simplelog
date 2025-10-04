@@ -120,3 +120,25 @@ This is helpful when you want to ensure that only mass-assignable attributes are
 public function logFillable(): LogOptions;
 ```
 
+# Logging with Batch
+
+**LogBatch** class can be used for logging the pile of model which use **SimpleLog** trait with a uuid batch id.
+
+```php
+function example()
+{
+
+    LogBatch::start();
+
+    ExampleClass::create([ // will log for 'created' event
+        'foo' => 'bar'
+    ]);
+
+    ExampleClassTwo::create([ // will not log if not use 'SimpleLog' trait
+        'bar' => 'foo'
+    ]);
+
+    LogBatch::end();
+}
+```
+
