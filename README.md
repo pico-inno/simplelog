@@ -142,3 +142,38 @@ function example()
 }
 ```
 
+**Note:** **LogBatch** start and end methods can be used with database transaction. It is done by env value or config.
+
+```php
+
+DB_TRANSACTION_ON_LOG=true
+
+// or
+
+'db_transaction_on_log' => env('DB_TRANSACTION_ON_LOG', false),
+
+```
+
+# Use of Logging with DB transaction on
+
+```php
+try{
+
+    LogBatch::start();
+
+    ExampleClass::create([ // will log for 'created' event
+        'foo' => 'bar'
+    ]);
+
+    ExampleClassTwo::create([ // will not log if not use 'SimpleLog' trait
+        'bar' => 'foo'
+    ]);
+
+    LogBatch::end();
+}catch(\Exception $e){
+    
+    LogBatch::rollback();
+    
+}
+
+```
