@@ -107,7 +107,7 @@ trait SimpleLog
             }
         }
 
-        activity($model->logName)
+        activity($model->getLogName())
             ->log($logDescription)
             ->properties($properties)
             ->event($event)
@@ -120,9 +120,14 @@ trait SimpleLog
      *
      * @return string
      */
-    protected function getLogName()
+    public function getLogName()
     {
-        return "{$this->getTable()}";
+        return $this->logName;
+    }
+
+    public function getFailureDescription($event): ?string
+    {
+        return null;
     }
 
     /**

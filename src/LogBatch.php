@@ -39,44 +39,44 @@ class LogBatch
 
         self::$is_logging_batch = true;
         self::$batch_uuid = uniqid();
-        // self::$records = [
-        //     'create' => [],
-        //     'update' => [],
-        //     'delete' => [],
-        // ];
 
-        // if (! self::$listenerRegistered) {
-        //     DB::listen(function ($query) {
+        self::$records = [];
 
-        //         if (! self::$is_logging_batch) {
-        //             return;
-        //         }
+        if (! self::$listenerRegistered) {
+            DB::listen(function ($query) {
 
-        //         $sql = Str::upper(substr($query->sql, 0, 6));
+                if (! self::$is_logging_batch) {
+                    return;
+                }
 
-        //         if (in_array($sql, ['INSERT', 'UPDATE', 'DELETE'])) {
-        //             $key = match ($sql) {
-        //                 'INSERT' => 'create',
-        //                 'UPDATE' => 'update',
-        //                 'DELETE' => 'delete',
-        //                 default => 'others',
-        //             };
+                $sql = Str::upper(substr($query->sql, 0, 6));
 
-        //             self::$records[$key][] = [
-        //                 'sql' => $query->sql,
-        //                 'bindings' => self::mapBindings($query),
-        //                 'time' => $query->time,
-        //                 'table' => self::getTableNameFromSQL($query->sql),
-        //             ];
-        //         }
+                if (in_array($sql, ['INSERT', 'UPDATE', 'DELETE'])) {
+                    $event = match ($sql) {
+                        'INSERT' => 'create',
+                        'UPDATE' => 'update',
+                        'DELETE' => 'delete',
+                        default => 'others',
+                    };
 
-        //     });
+                    self::$records[] = [
+                        'sql' => $query->sql,
+                        'bindings' => self::mapBindings($query),
+                        'time' => $query->time,
+                        'table' => self::getTableNameFromSQL($query->sql),
+                        'event' => $event,
+                    ];
+                }
 
-        //     self::$listenerRegistered = true;
+            });
 
-        // }
+            self::$listenerRegistered = true;
 
-        DB::beginTransaction();
+        }
+
+        if (config('activity_log.db_transaction_on_log')) {
+            DB::beginTransaction();
+        }
     }
 
     /**
@@ -84,35 +84,9 @@ class LogBatch
      */
     public static function end(): void
     {
-        DB::commit();
-
-        // foreach (self::$records as $action => $datas) {
-        //     foreach ($datas as $data) {
-        //         $model = self::find_model_by_table($data['table']);
-        //         $class = new $model;
-        //         if (! $class->hasLog) {
-        //             continue;
-        //         }
-
-        //         $logData = $class->getLogData();
-
-        //         $logName = $class->logName ?? ($logData[$action]['logName'] ?? null);
-        //         $logAction = $class->logAction ?? ($logData[$action]['logAction'] ?? null);
-        //         $logProperties = $class->logProperties ?? ($logData[$action]['logProperties'] ?? null);
-        //         $logDescription = $class->logDescription ?? ($logData[$action]['logDescription'] ?? null);
-
-        //         $table = Str::singular($data['table']);
-        //         ActivityLog::create([
-        //             'log_name' => $logName ?? "{$action}_{$table}",
-        //             'event' => $logAction ?? $action,
-        //             'properties' => $logProperties ?? json_encode($data['bindings']),
-        //             'description' => $logDescription ?? "The {$table} has been {$action}d",
-        //             'status' => 'success',
-        //             'batch_id' => self::$batch_uuid,
-        //             'created_by' => Auth::id() ?? null,
-        //         ]);
-        //     }
-        // }
+        if (config('activity_log.db_transaction_on_log')) {
+            DB::commit();
+        }
 
         self::reset();
     }
@@ -122,21 +96,25 @@ class LogBatch
      */
     public static function rollback(): void
     {
-        DB::rollBack();
-
-        foreach (self::$records as $action => $datas) {
-            foreach ($datas as $data) {
-                $table = Str::singular($data['table']);
-                ActivityLog::create([
-                    'log_name' => "{$action}_{$table}",
-                    'event' => $action,
-                    'properties' => json_encode($data['bindings']),
-                    'description' => "The {$action} on {$table} was rolled back",
-                    'status' => 'fail',
-                    'created_by' => Auth::id() ?? null,
-                ]);
-            }
+        if (config('activity_log.db_transaction_on_log')) {
+            DB::rollBack();
         }
+
+        $data = collect(self::$records)->last();
+
+        $activityLog = app(ActivityLog::class);
+        $activityLog->created_by = Auth::id();
+
+        $model = app(self::get_model_cache(self::getTableNameFromSQL($data['sql'])));
+
+        activity($model->getLogName())
+            ->log($model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
+            ->properties([
+                'data' => $data['bindings'],
+            ])
+            ->event($data['event'])
+            ->status('fail')
+            ->save();
 
         self::reset();
     }
@@ -196,24 +174,24 @@ class LogBatch
         $modelsPath = app_path('Models');
         $model_files = File::allFiles($modelsPath);
 
-        $data = Cache::get('simple_log_total_models', ['total_models' => 0, 'data' => []]);
-        $cachedTotal = $data['total_models'] ?? 0;
+        // $data = Cache::get('simple_log_total_models', ['total_models' => 0, 'data' => []]);
+        // $cachedTotal = $data['total_models'] ?? 0;
 
-        if (count($model_files) != $cachedTotal) {
+        // if (count($model_files) != $cachedTotal) {
 
-            $data['total_models'] = count($model_files);
-            $data['data'] = [];
+        //     $data['total_models'] = count($model_files);
+        //     $data['data'] = [];
 
-            self::get_model_cache($data, $table);
+        //     self::get_model_cache($data, $table);
 
-            Cache::put('simple_log_total_models', $data);
-        }
+        //     Cache::put('simple_log_total_models', $data);
+        // }
 
-        if (! isset($data['data'][$table])) {
-            self::get_model_cache($data, $table);
-        }
+        // if (! isset($data['data'][$table])) {
+        //     self::get_model_cache($data, $table);
+        // }
 
-        return $data['data'][$table] ?? null;
+        // return $data['data'][$table] ?? null;
     }
 
     /**
@@ -221,9 +199,9 @@ class LogBatch
      *
      * @param  mixed  $data
      * @param  mixed  $table
-     * @return void
+     * @return ?string
      */
-    private static function get_model_cache(&$data, $table)
+    private static function get_model_cache($table)
     {
 
         $modelsPath = app_path('Models');
@@ -234,9 +212,13 @@ class LogBatch
 
             if (class_exists($class) && is_subclass_of($class, Model::class)) {
                 $modelInstance = new $class;
-                $data['data'][$modelInstance->getTable()] = $class;
+                if ($modelInstance->getTable() === $table) {
+                    return $class;
+                }
             }
         }
+
+        return null;
 
     }
 }
