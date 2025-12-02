@@ -22,6 +22,12 @@ class LogBatch
      */
     public static bool $is_logging_batch = false;
 
+    /**
+     * a logname set for batch logging
+     * @var string
+     */
+    public static ?string $inline_logname = null;
+
     protected static $listenerRegistered = false;
 
     protected static $records = [];
@@ -34,12 +40,14 @@ class LogBatch
     /**
      * Start manual transaction and listen for database queries.
      */
-    public static function start(): void
+    public static function start($inline_logname = null): void
     {
+
+        self::$inline_logname = $inline_logname;
 
         self::$is_logging_batch = true;
         self::$batch_uuid = uniqid();
-
+ 
         self::$records = [];
 
         if (! self::$listenerRegistered) {

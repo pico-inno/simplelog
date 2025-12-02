@@ -12,7 +12,7 @@ return new class extends Migration
     public function up(): void
     {
         Schema::table('activity_logs', function (Blueprint $table) {
-            $table->unsignedInteger('batch_id')->nullable()->after('properties');
+            $table->uuid('batch_id')->nullable()->after('properties');
         });
     }
 

@@ -11,7 +11,6 @@ class ActivityLog extends Model
 
     public $guarded = [];
 
-
     protected $casts = [
         'properties' => 'collection'
     ];

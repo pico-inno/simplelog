@@ -2,6 +2,7 @@
 
 namespace PicoInno\SimpleLog\Trait;
 
+use Exception;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -43,12 +44,14 @@ trait SimpleLog
      */
     protected static function bootSimpleLog()
     {
-        if (! config('activity_log.must_be_logged')) {
+        if (!config('activity_log.must_be_logged')) {
             return;
         }
 
         foreach ((new static)->shouldLogEvents() as $event) {
-            static::$event(fn ($model) => static::logActivity($model, $event));
+            static::$event(function ($model) use ($event) {
+                static::logActivity($model, $event);
+            });
         }
     }
 
@@ -63,56 +66,63 @@ trait SimpleLog
      */
     protected static function logActivity($model, $event)
     {
-        $logOptions = (new static)->getLogOptions();
-        $logColumns = $logOptions->logAttributes;
+        try {
 
-        $allDbColumns = Schema::getColumnListing($model->getTable());
-        $logExceptColumns = $logOptions->logExceptAttributes;
+            $logOptions = (new static)->getLogOptions();
+            $logColumns = $logOptions->logAttributes;
 
-        $modelName = class_basename($model);
+            $allDbColumns = Schema::getColumnListing($model->getTable());
+            $logExceptColumns = $logOptions->logExceptAttributes;
 
-        $logDescription = ($logOptions->logDescriptionCallback)($event) ?? "The {$modelName} has been {$event}";
+            $modelName = class_basename($model);
 
-        if (in_array('*', $logColumns)) {
-            $logColumns = $allDbColumns;
-        }
+            $logDescription = $logOptions->logDescriptionCallback
+                ? ($logOptions->logDescriptionCallback)($event)
+                : "The {$modelName} has been {$event}";
 
-        if ($logOptions->logFillable) {
-            $logColumns = array_unique(array_merge($logColumns, $model->getFillable()));
-        }
-
-        if ($logOptions->logOnlyDirty && $event === 'updated') {
-            $logColumns = array_intersect($logColumns, array_keys($model->getDirty()));
-        }
-
-        if (! $logOptions->logTimestamps) {
-            $logExceptColumns = array_merge($logExceptColumns, $model->getDates());
-        }
-
-        $loggingColumns = array_diff($logColumns, $logExceptColumns);
-
-        if (empty($loggingColumns)) {
-            return;
-        }
-
-        $newData = $model->getAttributes();
-        $oldData = $model->getRawOriginal();
-
-        $properties = [];
-        foreach ($loggingColumns as $column) {
-            $properties['data'][$column] = data_get($newData, $column);
-
-            if ($event === 'updated') {
-                $properties['old'][$column] = data_get($oldData, $column);
+            if (in_array('*', $logColumns)) {
+                $logColumns = $allDbColumns;
             }
-        }
 
-        activity($model->getLogName())
-            ->log($logDescription)
-            ->properties($properties)
-            ->event($event)
-            ->status('success')
-            ->save();
+            if ($logOptions->logFillable) {
+                $logColumns = array_unique(array_merge($logColumns, $model->getFillable()));
+            }
+
+            if ($logOptions->logOnlyDirty && $event === 'updated') {
+                $logColumns = array_intersect($logColumns, array_keys($model->getDirty()));
+            }
+
+            if (!$logOptions->logTimestamps) {
+                $logExceptColumns = array_merge($logExceptColumns, $model->getDates());
+            }
+
+            $loggingColumns = array_diff($logColumns, $logExceptColumns);
+
+            if (empty($loggingColumns)) {
+                return;
+            }
+
+            $newData = $model->getAttributes();
+            $oldData = $model->getRawOriginal();
+
+            $properties = [];
+            foreach ($loggingColumns as $column) {
+                $properties['data'][$column] = data_get($newData, $column);
+
+                if ($event === 'updated') {
+                    $properties['old'][$column] = data_get($oldData, $column);
+                }
+            }
+
+            activity($model->getLogName())
+                ->log($logDescription)
+                ->properties($properties)
+                ->event($event)
+                ->status('success')
+                ->save();
+        } catch (Exception $e) {
+            throw $e;
+        }
     }
 
     /**

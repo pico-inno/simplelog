@@ -142,6 +142,9 @@ class ActivityLogger
     {
         if (LogBatch::$is_logging_batch) {
             $this->activityLog->batch_id = LogBatch::getBatchUuid();
+            if (LogBatch::$inline_logname) {
+                $this->activityLog->log_name = LogBatch::$inline_logname;
+            }
         }
 
         $this->activityLog->save();

@@ -40,7 +40,7 @@ class LogOptions
      */
     public static function defaults(): static
     {
-        return new static;
+        return (new static)->logAll();
     }
 
     /**
