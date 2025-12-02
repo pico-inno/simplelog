@@ -55,7 +55,7 @@ class ActivityLogger
      * @param  string  $name  The log name.
      * @return $this
      */
-    public function name(string $name = null): self
+    public function name($name = null): self
     {
         $this->activityLog->log_name = $name ?? $this->getDefaultLogName();
 
