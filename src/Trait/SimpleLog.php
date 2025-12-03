@@ -111,6 +111,7 @@ trait SimpleLog
 
                 if ($event === 'updated') {
                     $properties['old'][$column] = data_get($oldData, $column);
+                    $properties['updated_fields'] = array_keys($model->getDirty());
                 }
             }
 
