@@ -47,13 +47,13 @@ class LogBatch
 
         self::$is_logging_batch = true;
         self::$batch_uuid = uniqid();
- 
+
         self::$records = [];
 
-        if (! self::$listenerRegistered) {
+        if (!self::$listenerRegistered) {
             DB::listen(function ($query) {
 
-                if (! self::$is_logging_batch) {
+                if (!self::$is_logging_batch) {
                     return;
                 }
 
@@ -113,18 +113,47 @@ class LogBatch
         $activityLog = app(ActivityLog::class);
         $activityLog->created_by = Auth::id();
 
-        $model = app(self::get_model_cache(self::getTableNameFromSQL($data['sql'])));
+        $table_name = self::getTableNameFromSQL($data['sql']);
+        $model_name = self::get_model_cache($table_name);
 
-        activity($model->getLogName())
-            ->log($model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
-            ->properties([
-                'data' => $data['bindings'],
-            ])
-            ->event($data['event'])
-            ->status('fail')
-            ->save();
+        if ($model_name) {
+            $model = app($model_name);
+
+            activity(self::$inline_logname ?? $model->getLogName())
+                ->log($model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
+                ->properties([
+                    'data' => $data['bindings'],
+                ])
+                ->event("{$data['event']}d")
+                ->status('fail')
+                ->save();
+        } else {
+            activity(self::$inline_logname)
+                ->log("Something has been wrong with the table $table_name")
+                ->properties([
+                    'data' => $data['bindings'],
+                ])
+                ->event("{$data['event']}d")
+                ->status('fail')
+                ->save();
+        }
 
         self::reset();
+    }
+
+    /**
+     * Log on database transaction callback
+     */
+    public static function transaction(callable $callback, $inline_logname = null)
+    {
+        try {
+
+            LogBatch::start($inline_logname);
+            $callback();
+            LogBatch::end();
+        } catch (\Throwable $e) {
+            LogBatch::rollback();
+        }
     }
 
     /**
@@ -215,8 +244,8 @@ class LogBatch
         $modelsPath = app_path('Models');
         $model_files = File::allFiles($modelsPath);
         foreach ($model_files as $file) {
-            $relativePath = str_replace([$modelsPath.DIRECTORY_SEPARATOR, '.php'], '', $file->getPathname());
-            $class = 'App\\Models\\'.str_replace(DIRECTORY_SEPARATOR, '\\', $relativePath);
+            $relativePath = str_replace([$modelsPath . DIRECTORY_SEPARATOR, '.php'], '', $file->getPathname());
+            $class = 'App\\Models\\' . str_replace(DIRECTORY_SEPARATOR, '\\', $relativePath);
 
             if (class_exists($class) && is_subclass_of($class, Model::class)) {
                 $modelInstance = new $class;
