@@ -102,7 +102,7 @@ class LogBatch
     /**
      * Rollback manual transaction and log rollback entries.
      */
-    public static function rollback(): void
+    public static function rollback($message = null): void
     {
         if (config('activity_log.db_transaction_on_log')) {
             DB::rollBack();
@@ -121,7 +121,7 @@ class LogBatch
         if ($has_valid_logging) {
 
             activity(self::$inline_logname ?? $model->getLogName())
-                ->log($model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
+                ->log($message ?? $model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
                 ->properties([
                     'data' => $data['bindings'],
                 ])
@@ -130,7 +130,7 @@ class LogBatch
                 ->save();
         } else {
             activity(self::$inline_logname)
-                ->log("Something has been wrong with the table $table_name")
+                ->log($message ?? "Something has been wrong with the table $table_name")
                 ->properties([
                     'data' => $data['bindings'],
                 ])
