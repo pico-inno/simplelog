@@ -5,8 +5,10 @@ namespace PicoInno\SimpleLog;
 use Auth;
 use Cache;
 use DB;
+use Exception;
 use File;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Str;
 use PicoInno\SimpleLog\Models\ActivityLog;
 
@@ -59,7 +61,7 @@ class LogBatch
 
                 $sql = Str::upper(substr($query->sql, 0, 6));
 
-                if (in_array($sql, ['INSERT', 'UPDATE', 'DELETE'])) {
+                if (in_array($sql, ['SELECT', 'INSERT', 'UPDATE', 'DELETE'])) {
                     $event = match ($sql) {
                         'INSERT' => 'create',
                         'UPDATE' => 'update',
@@ -102,39 +104,60 @@ class LogBatch
     /**
      * Rollback manual transaction and log rollback entries.
      */
-    public static function rollback(): void
+    public static function rollback(Exception|string|null $message = null, $use_exception_message = false): void
     {
         if (config('activity_log.db_transaction_on_log')) {
             DB::rollBack();
         }
+        $table_name = null;
+        $event = null;
+        $properties = null;
 
-        $data = collect(self::$records)->last();
+        if ($message instanceof QueryException) {
+            $table_name = self::getTableNameFromSQL($message->getSql());
+            $sql = strtolower(substr($message->getSql(), 0, 6));
+            $event = match ($sql) {
+                'insert' => 'create',
+                'update' => 'update',
+                'delete' => 'delete',
+                default => 'others',
+            };
+            $model = self::get_model($table_name);
 
-        $activityLog = app(ActivityLog::class);
-        $activityLog->created_by = Auth::id();
+            $properties = [
+                'data' => $message->getBindings()
+            ];
 
-        $table_name = self::getTableNameFromSQL($data['sql']);
-        $model_name = self::get_model_cache($table_name);
-        $model = app(null);
+            $message = $use_exception_message ? $message->getMessage() : null;
+        } else {
+            $lastRecord = collect(self::$records)->last();
+            $table_name = self::getTableNameFromSQL($lastRecord['sql']);
+            $event = $lastRecord['event'];
+            $properties = [
+                'data' => $lastRecord['bindings'],
+            ];
+        }
+
+        # create model from table name
+        $model = self::get_model($table_name);
         $has_valid_logging = method_exists($model, 'getFailureDescription');
 
         if ($has_valid_logging) {
 
+            $activityLog = app(ActivityLog::class);
+            $activityLog->created_by = Auth::id();
+
             activity(self::$inline_logname ?? $model->getLogName())
-                ->log($model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
-                ->properties([
-                    'data' => $data['bindings'],
-                ])
-                ->event("{$data['event']}d")
+                ->log($message ?? $model->getFailureDescription($event) ?? "The {$event} of {$model->getTable()} has failed!")
+                ->properties($properties)
+                ->event("{$event}d")
                 ->status('fail')
                 ->save();
         } else {
             activity(self::$inline_logname)
-                ->log("Something has been wrong with the table $table_name")
-                ->properties([
-                    'data' => $data['bindings'],
-                ])
-                ->event("{$data['event']}d")
+                ->log($message ?? "Something has been wrong with the table $table_name")
+                ->properties($properties)
+                ->event("{$event}d")
                 ->status('fail')
                 ->save();
         }
@@ -197,39 +220,23 @@ class LogBatch
             preg_match('/update\s+["`]?(\w+)["`]*/i', $sql, $matches);
         } elseif (str_starts_with($sqlLower, 'delete')) {
             preg_match('/delete\s+from\s+["`]?(\w+)["`]*/i', $sql, $matches);
+        } elseif (str_starts_with($sqlLower, 'select')) {
+            preg_match('/from\s+["`]?(\w+)["`]*/i', $sql, $matches);
         }
 
         return $matches[1] ?? null;
     }
 
     /**
-     * Find the model class name by its table name.
+     * Find the model class by its table name.
      *
-     * @return string|null Fully qualified class name or null if not found
+     * @return Model
      */
-    private static function find_model_by_table(string $table): ?string
+    private static function get_model(string $table)
     {
-        $modelsPath = app_path('Models');
-        $model_files = File::allFiles($modelsPath);
+        $model_name = self::get_model_cache($table);
+        return app($model_name);
 
-        // $data = Cache::get('simple_log_total_models', ['total_models' => 0, 'data' => []]);
-        // $cachedTotal = $data['total_models'] ?? 0;
-
-        // if (count($model_files) != $cachedTotal) {
-
-        //     $data['total_models'] = count($model_files);
-        //     $data['data'] = [];
-
-        //     self::get_model_cache($data, $table);
-
-        //     Cache::put('simple_log_total_models', $data);
-        // }
-
-        // if (! isset($data['data'][$table])) {
-        //     self::get_model_cache($data, $table);
-        // }
-
-        // return $data['data'][$table] ?? null;
     }
 
     /**
@@ -259,4 +266,6 @@ class LogBatch
         return null;
 
     }
+
+
 }

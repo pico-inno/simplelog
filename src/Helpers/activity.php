@@ -1,4 +1,4 @@
-    <?php
+<?php
 
 use Illuminate\Database\Eloquent\Model;
 use PicoInno\SimpleLog\Helpers\ActivityLogger;
