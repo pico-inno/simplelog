@@ -115,9 +115,10 @@ class LogBatch
 
         $table_name = self::getTableNameFromSQL($data['sql']);
         $model_name = self::get_model_cache($table_name);
+        $model = app(null);
+        $has_valid_logging = method_exists($model, 'getFailureDescription');
 
-        if ($model_name) {
-            $model = app($model_name);
+        if ($has_valid_logging) {
 
             activity(self::$inline_logname ?? $model->getLogName())
                 ->log($model->getFailureDescription($data['event']) ?? "The {$data['event']} of {$model->getTable()} has failed!")
