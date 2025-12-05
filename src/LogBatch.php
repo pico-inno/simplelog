@@ -109,9 +109,12 @@ class LogBatch
         if (config('activity_log.db_transaction_on_log')) {
             DB::rollBack();
         }
+
+        $has_valid_logging = true;
         $table_name = null;
-        $event = null;
-        $properties = null;
+        $event = 'unknown';
+        $properties = [];
+        $model = '';
 
         if ($message instanceof QueryException) {
             $table_name = self::getTableNameFromSQL($message->getSql());
@@ -130,17 +133,23 @@ class LogBatch
 
             $message = $use_exception_message ? $message->getMessage() : null;
         } else {
-            $lastRecord = collect(self::$records)->last();
-            $table_name = self::getTableNameFromSQL($lastRecord['sql']);
-            $event = $lastRecord['event'];
-            $properties = [
-                'data' => $lastRecord['bindings'],
-            ];
+            if (!count(self::$records)) {
+                $has_valid_logging = false;
+            } else {
+
+                $lastRecord = collect(self::$records)->last();
+                $table_name = $lastRecord ? self::getTableNameFromSQL($lastRecord['sql']) : null;
+                $event = $lastRecord['event'] ?? 'unknown';
+                $properties = [
+                    'data' => $lastRecord['bindings'] ?? [],
+                ];
+                $model = self::get_model($table_name);
+                $has_valid_logging = method_exists($model, 'getFailureDescription');
+            }
         }
 
         # create model from table name
-        $model = self::get_model($table_name);
-        $has_valid_logging = method_exists($model, 'getFailureDescription');
+        $event_text = in_array($event, ['create', 'update', 'delete']) ? $event . 'd' : $event;
 
         if ($has_valid_logging) {
 
@@ -150,14 +159,14 @@ class LogBatch
             activity(self::$inline_logname ?? $model->getLogName())
                 ->log($message ?? $model->getFailureDescription($event) ?? "The {$event} of {$model->getTable()} has failed!")
                 ->properties($properties)
-                ->event("{$event}d")
+                ->event($event_text)
                 ->status('fail')
                 ->save();
         } else {
             activity(self::$inline_logname)
                 ->log($message ?? "Something has been wrong with the table $table_name")
                 ->properties($properties)
-                ->event("{$event}d")
+                ->event($event_text)
                 ->status('fail')
                 ->save();
         }
@@ -211,6 +220,8 @@ class LogBatch
      */
     private static function getTableNameFromSQL(string $sql): ?string
     {
+        if (!$sql)
+            return null;
         $matches = [];
         $sqlLower = strtolower($sql);
 
