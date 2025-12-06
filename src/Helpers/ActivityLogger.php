@@ -109,6 +109,7 @@ class ActivityLogger
      */
     public function properties(array|object $data): self
     {
+
         $this->activityLog->properties = $data;
 
         return $this;

@@ -126,6 +126,7 @@ class LogBatch
                 default => 'others',
             };
             $model = self::get_model($table_name);
+            $has_valid_logging = method_exists($model, 'getFailureDescription');
 
             $properties = [
                 'data' => $message->getBindings()

@@ -107,7 +107,13 @@ trait SimpleLog
 
             $properties = [];
             foreach ($loggingColumns as $column) {
-                $properties['data'][$column] = data_get($newData, $column);
+
+                $value = data_get($newData, $column);
+
+                if (!$logOptions->logOnNull && is_null($value))
+                    continue;
+
+                $properties['data'][$column] = $value;
 
                 if ($event === 'updated') {
                     $properties['old'][$column] = data_get($oldData, $column);
