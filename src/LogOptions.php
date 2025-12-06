@@ -16,6 +16,11 @@ class LogOptions
     public bool $logTimestamps = true;
 
     /**
+     * Log setting for null value in properties
+     */
+    public bool $logOnNull = true;
+
+    /**
      * Whether to log only dirty attributes.
      */
     public bool $logOnlyDirty = false;
@@ -89,6 +94,17 @@ class LogOptions
     public function dontLogTimestamps(): static
     {
         $this->logTimestamps = false;
+
+        return $this;
+    }
+
+    /**
+     * Skip the logging into properties if the value is null
+     * Target to reduce the json size
+     */
+    public function dontLogOnNull(): static
+    {
+        $this->logOnNull = false;
 
         return $this;
     }
